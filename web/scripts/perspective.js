@@ -12,9 +12,13 @@ let rowCounter,
 	tableNames = [],
 	viewConfig = {},
 	viewData = [],
-	logLevel = 'info';
+	logLevel = 'debug';
 
-// create Perspective viewer element
+window.addEventListener('load', async function () {
+	// create worker for table data loading
+	worker = perspective.worker();
+});
+
 document.addEventListener('DOMContentLoaded', async function () {
 	// initialize table container
 	tableContainer = document.getElementById('table-container');
@@ -24,30 +28,50 @@ document.addEventListener('DOMContentLoaded', async function () {
 	viewer.setAttribute('editable', true);
 	tableContainer.appendChild(viewer);
 
-	// add view update handler
-	viewer.addEventListener('perspective-view-update', event => {
-		logMessage(`viewer.perspective-view-update...`);
-		// updateStats();
-	});
-
 	// add viewer config change handler for saving view state
-	viewer.addEventListener('perspective-config-update', event => {
-		if (!restoringConfig) {
-			updateConfig();
-		}
-		// updateStats();
+	viewer.addEventListener('perspective-config-update', onConfigUpdate);
+});
+
+/**
+ * Perspective view config update handler.
+ */
+async function onConfigUpdate() {
+	// get perspective viewer config
+	const viewConfig = await viewer.save();
+	console.log('perspective.onConfigUpdate():', JSON.stringify(viewConfig, null, 2));
+	if (!restoringConfig) {
+		updateConfig();
+	}
+	// updateStats();
+
+	if (viewState.tableConfig === undefined) {
+		// add table config to table view state
+		viewState.tableConfig = tableConfig;
+	}
+
+	if (!tableConfig.views) {
+		// create new views config collection
+		tableConfig.views = {};
+	}
+
+	// update perspective view config in table view state
+	const viewType = viewConfig.plugin;
+	tableConfig.view = viewType;
+	tableConfig.views[viewType] = viewConfig;
+
+	// update table view state
+	vscode.setState(viewState);
+	console.log(`perspective.onConfigUpdate():viewState`, viewState);
+
+	// notify webview about table config changes
+	vscode.postMessage({
+		command: 'updateTableConfig',
+		tableConfig: tableConfig
 	});
-});
 
-window.addEventListener('load', async function () {
-	// create worker for table data loading
-	worker = perspective.worker();
-});
-
-// tag viewer loading
-window.addEventListener('WebComponentsReady', event => {
-	logMessage('window.WebComponentsReady\n\n data viewer initialized!');
-});
+	// hide data loading progress ring
+	progressRing.style.visibility = 'hidden';
+}
 
 /**
  * Creates new Tabulator table with initial set of data to display.
@@ -55,25 +79,26 @@ window.addEventListener('WebComponentsReady', event => {
  * @param {*} tableSchema Data table schema with inferred column fields info.
  * @param {*} tableData Data array to display in tabulator table.
  */
-function createTable(tableSchema, tableData) {
+async function createTable(tableSchema, tableData) {
 	if (table === undefined) {
 		// show progress ring
 		progressRing.style.visibility = 'visible';
 
 		// create perspective table and load initial data into view
-		table = worker.table(tableData);
+		table = await worker.table(tableData);
 		viewer.load(table);
 		viewer.toggleConfig();
 
-		// create table columns array from table schema fields
+		// create table columns array from table schema fields 
+		/*
 		tableColumns = createTableColumns(tableSchema);
 		if (tableColumns.length > 0) {
 			// don't auto generate columns
 			autoColumns = false;
 		}
-
+		*/
 		// create tabulator table instance for tabular data display
-		const tableOptions = createTableConfig(tableColumns);
+		// const tableOptions = createTableConfig(tableColumns);
 
 		// TODO: modify this to work with Perspective viewer grid
 
@@ -214,8 +239,7 @@ function addData(table, dataRows, dataPageIndex) {
 		tableData.push(...dataRows);
 		if (loadedRows <= 0) {
 			// reset table data on on reload
-			// TODO: change this to work with perspective table
-			//table.replaceData(dataRows);
+			table.replace(dataRows);
 		}
 		loadedRows += dataRows.length;
 		// console.log('tableView.addData(): loading data page:', loadedDataPage);
@@ -235,8 +259,9 @@ function showDataPage() {
 	const pageStart = (dataPageIndex * dataPageSize);
 	const pageData = tableData.slice(pageStart, Math.min(pageStart + dataPageSize, totalRows));
 	// TODO: modify this to work with Perspective viewer
-	// table.clearData();
-	// table.replaceData(pageData);
+	table.clear();
+	// table.replace(pageData);
+	table.update(pageData);
 }
 
 /**
@@ -244,9 +269,8 @@ function showDataPage() {
  */
 function clearTable(table) {
 	if (table) {
-		// TODO: modify this to work with Perspective viewer
 		// clear displayed table view
-		//table.clearData();
+		table.clear();
 
 		// reset loaded table data row/page counters
 		loadedRows = 0;
